@@ -1,0 +1,713 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.3.0
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+# <i> MODELO DE REGRESSÃO LOGÍSTICA APLICADO PARA LEADSCORE
+
+
+<B> INPUT DAS BIBLIOTECAS
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import confusion_matrix
+
+from sklearn.ensemble import RandomForestClassifier
+
+from datetime import datetime as dt
+
+# %matplotlib inline
+```
+
+<B> Carga da Base de Dados compilada com as infos necessárias para construção do modelo
+
+```{python}
+df_base = pd.read_csv("Base_Cruzeiro_LeadScore.csv",error_bad_lines=False,low_memory=False)
+df_base.shape
+```
+
+```{python}
+df_base['Ciclo_Envio'] = df_base['Ciclo_Envio'].astype(str)
+df_base['Ciclo_Envio'] = df_base['Ciclo_Envio'].str[:4]
+
+df_base['Ciclo_Lead'] = df_base['Ciclo_Lead'].astype(str)
+df_base['Ciclo_Lead'] = df_base['Ciclo_Lead'].str[:4]
+```
+
+```{python}
+df_base['Ciclo_Envio'] = df_base['Ciclo_Envio'].astype(float)
+df_base['Ciclo_Lead'] = df_base['Ciclo_Lead'].astype(float)
+```
+
+```{python}
+df_base['Ciclo_ls'] = df_base['Ciclo_Envio'] - df_base['Ciclo_Lead']
+```
+
+<b> Criando o Flag_Matriculado binário
+
+```{python}
+df_base['Flag_Matriculado'] = df_base['EAD_mat']+df_base['PRESENCIAL_mat']
+```
+
+```{python}
+df_base['Flag_Matriculado'] = np.where(df_base['Flag_Matriculado']>0,1,0)
+```
+
+```{python}
+df_base['Flag_Matriculado'].unique()
+```
+
+<b> Normalizando os Nomes das Cidades
+
+```{python}
+from unicodedata import normalize
+
+df_base['Cidade'] = df_base['Cidade'].apply(lambda x :normalize('NFKD', x).encode('ASCII','ignore').decode('ASCII')).str.upper()
+df_base['Estado'] = df_base['Estado'].apply(lambda x :normalize('NFKD', x).encode('ASCII','ignore').decode('ASCII')).str.upper()
+```
+
+<B> Tratamento da Base
+
+```{python}
+df_trat = df_base.copy()
+df_trat.shape
+```
+
+```{python}
+df_trat["CIDADE_ESTADO"] = df_trat["Cidade"] + df_trat["Estado"]
+```
+
+```{python}
+#"Declarado"/"Não declarado"
+df_trat['Telefone'] = np.where(df_trat['Telefone'].isna(), 0, 1)
+df_trat['Email'] = np.where(df_trat['Email'].isna(), 0, 1)
+
+#Classe "Não declarado"
+df_trat['CIDADE_ESTADO'] = np.where(df_trat['CIDADE_ESTADO'].isna(), 'Não declarado', df_trat['CIDADE_ESTADO'])
+df_trat['Estado'] = np.where(df_trat['Estado'].isna(), 'Não declarado', df_trat['Estado'])
+df_trat['Ano Escolar'] = np.where(df_trat['Ano Escolar'].isna(), 'Não declarado', df_trat['Ano Escolar'])
+
+#Substituição dos outliers
+df_trat["Idade"] = pd.to_numeric(df_trat["Idade"], errors='coerce')
+df_trat['Idade'] = np.where(df_trat['Idade'] < 12, np.nan, df_trat['Idade'])
+df_trat['Idade'] = np.where(df_trat['Idade'] > 40, np.nan, df_trat['Idade'])
+df_trat['Idade'] = np.where(pd.to_numeric(df_trat['Idade'], errors='coerce').isna(), 0, df_trat['Idade'])
+df_trat['Idade'] = df_trat['Idade'].astype(int)
+
+df_trat.shape
+```
+
+```{python}
+bins_idade = np.histogram_bin_edges(df_trat['Idade'], bins='sturges')
+df_trat['Idade_range'] = pd.cut(df_trat['Idade'], bins=bins_idade, labels=bins_idade[:-1])
+df_trat.loc[df_trat['Idade_range'].isna(), 'Idade_range'] = 0
+
+df_trat.shape
+```
+
+<b> Criação das Listas que gerarão os encoders (Cidade)
+
+```{python}
+### Carregue o dataframe que contém as infos novas aqui
+
+auxiliar = pd.read_csv('output22.01.2020.csv')[['Cidade','Estado']]
+```
+
+```{python}
+from unicodedata import normalize
+
+auxiliar['Cidade'] = auxiliar['Cidade'].apply(lambda x :normalize('NFKD', x).encode('ASCII','ignore').decode('ASCII')).str.upper()
+auxiliar['Estado'] = auxiliar['Estado'].apply(lambda x :normalize('NFKD', x).encode('ASCII','ignore').decode('ASCII')).str.upper()
+```
+
+```{python}
+auxiliar['CIDADE_ESTADO'] = auxiliar['Cidade']+auxiliar['Estado']
+```
+
+```{python}
+auxiliar2 = df_trat[['Cidade','Estado','CIDADE_ESTADO']]
+```
+
+```{python}
+enc_auxiliar = pd.concat([auxiliar,auxiliar2])
+```
+
+```{python}
+enc_auxiliar = enc_auxiliar.drop_duplicates('CIDADE_ESTADO')
+```
+
+<b> Criação das Listas que gerarão os encoders (Escolaridade)
+
+```{python}
+### Carregue o dataframe que contém as infos novas aqui
+
+auxiliar_escolaridade = pd.read_csv('output22.01.2020.csv')[['Ano Escolar']]
+```
+
+```{python}
+auxiliar_escolaridade2 = df_trat[['Ano Escolar']]
+```
+
+```{python}
+enc_auxiliar_escolaridade = pd.concat([auxiliar_escolaridade,auxiliar_escolaridade2])
+```
+
+```{python}
+enc_auxiliar_escolaridade = enc_auxiliar_escolaridade.fillna('Não declarado')
+```
+
+```{python}
+enc_auxiliar_escolaridade = enc_auxiliar_escolaridade.drop_duplicates('Ano Escolar')
+```
+
+```{python}
+enc_auxiliar_escolaridade.shape
+```
+
+```{python}
+# Le = LabelEncoder
+
+city_le = LabelEncoder()
+citytype_le = LabelEncoder()
+uf_le = LabelEncoder()
+schoolyear_le = LabelEncoder()
+age_le = LabelEncoder()
+
+city_le.fit(enc_auxiliar['CIDADE_ESTADO'])
+uf_le.fit(enc_auxiliar['Estado'])
+schoolyear_le.fit(enc_auxiliar_escolaridade['Ano Escolar'])
+age_le.fit(df_trat['Idade_range'])
+df_trat.shape
+```
+
+```{python}
+df_trat['CIDADE_ESTADO'] =  city_le.transform(df_trat['CIDADE_ESTADO'])
+df_trat['Estado'] = uf_le.transform(df_trat['Estado'])
+df_trat['Ano Escolar'] = schoolyear_le.transform(df_trat['Ano Escolar'])
+df_trat['Idade_range'] = age_le.transform(df_trat['Idade_range'])
+df_trat.shape
+```
+
+```{python}
+def encoding(df, var, tipo):
+    if tipo=='freq':
+        df = (df.groupby(var)["Id"].count()/len(df)).reset_index()
+        df = df.rename(columns={'Id': var+'_enc'})
+    
+    if tipo=='mean':
+        df = (df.groupby(var)["Flag_Matriculado"].mean()).reset_index()
+        df = df.rename(columns={'Flag_Matriculado': var+'_enc'})
+        
+    if tipo=='freq_mat':
+        df = (df.groupby(var)["Flag_Matriculado"].sum()/len(df[df["Flag_Matriculado"]==1])).reset_index()
+        df = df.rename(columns={'Flag_Matriculado': var+'_enc'})
+        
+    if tipo=='woe':
+        df = ((df.groupby(var)["Flag_Matriculado"].sum()/(df.groupby(var)["Flag_Matriculado"].count()-df.groupby(var)["Flag_Matriculado"].sum())).apply(lambda x: np.where(x == 0, 0.000000001, x)).apply(lambda x: math.log(x))).reset_index()
+        df = df.rename(columns={'Flag_Matriculado': var+'_enc'})
+        
+    if tipo=='dummy':
+        df = pd.get_dummies(df[var], prefix=var)
+        
+    return df
+```
+
+```{python}
+tipo = 'mean'
+```
+
+```{python}
+if tipo == 'dummy':
+    city_encoding = encoding(df_trat, 'CIDADE_ESTADO', tipo=tipo)
+    uf_encoding = encoding(df_trat, 'Estado', tipo=tipo)
+    schoolyear_encoding = encoding(df_trat, 'Ano Escolar', tipo=tipo)
+    
+    df_trat = df_trat.merge(citytype_encoding, how="left", left_index=True, right_index=True)
+    df_trat = df_trat.merge(city_encoding, how="left", left_index=True, right_index=True)
+    df_trat = df_trat.merge(uf_encoding, how="left", left_index=True, right_index=True)
+    df_trat = df_trat.merge(schoolyear_encoding, how="left", left_index=True, right_index=True)
+    
+else:
+    phonenumber_encoding = encoding(df_trat, 'Telefone', tipo=tipo)
+    email_encoding = encoding(df_trat, 'Email', tipo=tipo)
+    city_encoding = encoding(df_trat, 'CIDADE_ESTADO', tipo=tipo)
+    uf_encoding = encoding(df_trat, 'Estado', tipo=tipo)
+    schoolyear_encoding = encoding(df_trat, 'Ano Escolar', tipo=tipo)
+    age_encoding = encoding(df_trat, 'Idade_range', tipo=tipo)
+
+    df_trat = df_trat.merge(phonenumber_encoding, how="left", left_on='Telefone', right_on='Telefone')
+    df_trat = df_trat.merge(email_encoding, how="left", left_on='Email', right_on='Email')
+    df_trat = df_trat.merge(city_encoding, how="left", left_on='CIDADE_ESTADO', right_on='CIDADE_ESTADO')
+    df_trat = df_trat.merge(uf_encoding, how="left", left_on='Estado', right_on='Estado')
+    df_trat = df_trat.merge(schoolyear_encoding, how="left", left_on='Ano Escolar', right_on='Ano Escolar')
+    df_trat = df_trat.merge(age_encoding, how="left", left_on='Idade_range', right_on='Idade_range')
+```
+
+```{python}
+df_trat['Ciclo_ls'] = df_trat['Ciclo_ls'].fillna(-99)
+```
+
+<b> Modelagem da Base
+
+```{python}
+df_model = df_trat.copy() # Retirando a Remessa 14 que será usada nos novos dados
+df_model.shape
+```
+
+```{python}
+if tipo == 'dummy':
+    columns = np.concatenate((['Idade', 'Telefone', 'Flag_Matriculado','Ciclo_Lead'], citytype_encoding.columns.values, uf_encoding.columns.values), axis=None)
+else:
+    columns = ['Idade', 'Telefone_enc', 'CIDADE_ESTADO_enc','Ciclo_ls','Flag_Matriculado']
+```
+
+```{python}
+X = df_model[columns]
+y = df_model['Flag_Matriculado']
+```
+
+<b> Standard Scaler
+
+```{python}
+scaler = StandardScaler()
+scaler = scaler.fit(X.drop(["Flag_Matriculado"], 1))
+X_sc = scaler.transform(X.drop(["Flag_Matriculado"], 1))
+X_sc = pd.DataFrame(data=X_sc, columns = X.drop(["Flag_Matriculado"], 1).columns, index = X.index)
+```
+
+<B> Split Entre Treino e Teste
+
+```{python}
+X_treino, X_teste, y_treino, y_teste = train_test_split(X_sc, y, test_size=0.33)
+```
+
+```{python}
+print(X_treino.shape,X_teste.shape,y_treino.shape,y_teste.shape)
+```
+
+<B> Aplicando a Regressão Logística
+
+```{python}
+model = 'logisticregression'
+```
+
+```{python}
+if model == 'logisticregression':
+    clf = LogisticRegression(solver='liblinear', multi_class='ovr', class_weight='balanced', max_iter=100).fit(X_treino, y_treino)
+
+    bestF = clf
+    
+if model == 'randomforest':
+    clf = RandomForestClassifier(n_estimators=10, min_samples_leaf=1000, class_weight='balanced', criterion = 'entropy').fit(X_treino, y_treino)
+
+    bestF = clf
+    print(bestF.feature_importances_)
+    
+if model == 'randomforest_gs':
+    
+    clf = RandomForestClassifier(class_weight = 'balanced', oob_score = True)
+
+    n_estimators = [10, 20, 40, 80]
+    min_samples_leaf = [1600, 3200, 6400]
+    criterion = ['gini', 'entropy']
+
+    hyperF = dict(criterion = criterion,
+                  n_estimators = n_estimators,
+                  min_samples_leaf = min_samples_leaf)
+
+    gridF = GridSearchCV(clf, hyperF, cv = 3, verbose = 1,
+                          n_jobs = -1, scoring = 'f1')
+
+    bestF = gridF.fit(X_treino, y_treino)
+    
+    print(bestF.best_estimator_.feature_importances_)
+    
+    print(bestF.best_params_)
+    
+if model == 'logisticregression_gs':
+    
+    clf = LogisticRegression(solver='liblinear', multi_class='ovr', class_weight='balanced')
+
+    max_iter = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
+
+    hyperF = dict(max_iter = max_iter)
+
+    gridF = GridSearchCV(clf, hyperF, cv = 10, verbose = 1,
+                          n_jobs = -1, scoring = 'f1')
+
+    bestF = gridF.fit(X_treino, y_treino)
+    
+    print(bestF.best_params_)
+```
+
+<B> Avaliando o Modelo na base TREINO
+
+```{python}
+y_pred = bestF.predict(X_treino)
+y_prob = bestF.predict_proba(X_treino)
+```
+
+Matriz de Confusão: Accuracy, Precision, Recall e F1 Score
+
+```{python}
+tn, fp, fn, tp = confusion_matrix(y_treino, y_pred).ravel()
+confusion_matrix(y_treino, y_pred)
+```
+
+```{python}
+accuracy = (tn + tp) / (tn + fp + fn + tp)
+recall = (tp) / (fn + tp)
+precision = (tp) / (fp + tp)
+f1_score = (2*tp) / (fp + fn + 2*tp)
+```
+
+```{python}
+print(accuracy)
+print(recall)
+print(precision)
+print(f1_score)
+```
+
+<b> Avaliando o Modelo na Base TESTE
+
+```{python}
+y_pred = bestF.predict(X_teste)
+y_prob = bestF.predict_proba(X_teste)
+```
+
+```{python}
+tn, fp, fn, tp = confusion_matrix(y_teste, y_pred).ravel()
+confusion_matrix(y_teste, y_pred)
+```
+
+```{python}
+accuracy = (tn + tp) / (tn + fp + fn + tp)
+recall = (tp) / (fn + tp)
+precision = (tp) / (fp + tp)
+f1_score = (2*tp) / (fp + fn + 2*tp)
+```
+
+```{python}
+print(accuracy)
+print(recall)
+print(precision)
+print(f1_score)
+```
+
+<b> Plottagem de Resultados
+
+```{python}
+df_result = pd.DataFrame(y_teste).merge(pd.DataFrame(y_prob[:, 1], index=y_teste.index), how="left", left_index=True, right_index=True)
+df_result = df_result.rename(columns={0: 'LeadScore'})
+```
+
+```{python}
+n_score, bins_score, patches_score = plt.hist(df_result['LeadScore'], align='left', color='b', label='Matriculado', alpha=0.5)
+plt.close()
+
+df_result["Faixa LeadScore"] = pd.DataFrame(pd.cut(df_result['LeadScore'], bins_score, labels=bins_score[:-1], include_lowest=True))["LeadScore"].astype(float)
+#df_result["Faixa LeadScore"] = df_result["LeadScore"].apply(lambda x: math.floor(10*x)/10)
+
+df_result = df_model.merge(df_result[df_result.columns.difference(df_trat.columns)], how="inner", left_index=True, right_index=True)
+
+df_conversao = df_result.groupby("Faixa LeadScore").agg({
+    "Id": ["count"],
+    "Flag_Matriculado": ["sum", "mean"],
+})
+df_conversao.columns = df_conversao.columns.droplevel()
+df_conversao.columns = ["Enviados", "Matriculados", "Taxa de conversão"]
+df_conversao = df_conversao.reset_index()
+
+df_conversao = df_conversao.merge(pd.DataFrame(df_conversao.loc[::-1, "Enviados"].cumsum()[::-1]), how="left", right_index=True, left_index=True)
+df_conversao = df_conversao.merge(pd.DataFrame(df_conversao.loc[::-1, "Matriculados"].cumsum()[::-1]), how="left", right_index=True, left_index=True)
+df_conversao["Taxa de conversão acumulado"] = df_conversao["Matriculados_y"]/df_conversao["Enviados_y"]
+
+#df_conversao = df_conversao.fillna(0)
+
+df_conversao.sort_values('Faixa LeadScore',ascending=True)
+```
+
+```{python}
+fig, axes = plt.subplots(1, 1, sharey=False, sharex=True, figsize=(20,5))
+axes.hist(df_result['LeadScore'], bins=bins_score, align='left', color='b', label='Matriculado', alpha=0.5)
+axes.legend(loc='best')
+axes.set_title('LeadScore - Matriculados')
+axes2 = axes.twinx()
+axes2.plot(bins_score[:-1], df_conversao['Taxa de conversão'], label='Tx de Conversao', marker='o', color='orange')
+axes2.plot(bins_score, np.array([df_result["Flag_Matriculado"].mean()]*len(bins_score)), label='Tx de Conversao', marker='o', color='black')
+axes.set_xlim(0, 1, 0.1)
+axes.set_ylim(0, 35000, 1000)
+axes2.set_ylim(0, 0.20, 0.05)
+```
+
+```{python}
+df_conversao['%Envio'] = df_conversao['Enviados_y'] / df_conversao['Enviados_x'].sum()
+df_conversao['%Matriculados'] = df_conversao['Matriculados_y'] / df_conversao['Matriculados_x'].sum()
+```
+
+```{python}
+df_conversao
+```
+
+```{python}
+fig, ax1 = plt.subplots(1, 1, sharey=True, sharex=True, figsize=(20,5))
+ax1.plot(df_conversao['Faixa LeadScore'],df_conversao['%Envio'],color='b')
+ax2 = ax1.twinx()  
+ax2.plot(df_conversao['Faixa LeadScore'],df_conversao['%Matriculados'],color='r');
+```
+
+<B> ACRESCENTANDO NOVOS DADOS
+
+```{python}
+df_trat_new = pd.read_csv("output22.01.2020.csv")
+```
+
+```{python}
+df_trat_new.shape
+```
+
+```{python}
+df_dados_originais = df_trat_new.copy()
+```
+
+```{python}
+df_trat_new["Flag_Matriculado"] = 0
+```
+
+```{python}
+df_trat_new = df_trat_new.rename(columns={'ciclo':'Ciclo_ls'})
+```
+
+```{python}
+df_trat_new['Ciclo_ls'].unique()
+```
+
+```{python}
+### Colocando o Ciclo no padrão -1 , 1
+
+df_trat_new['Ciclo_ls'] = df_trat_new['Ciclo_ls'].replace(2019,-1).replace(2018,-1).replace(2017,-1)
+df_trat_new['Ciclo_ls'] = df_trat_new['Ciclo_ls'].replace(2020,0)
+```
+
+```{python}
+df_trat_new['Ciclo_ls'].unique()
+```
+
+```{python}
+df_trat_new.shape
+```
+
+```{python}
+df_trat_new = df_trat_new.drop(columns=['Ação','Campanha','Cursos Relacionados','Cursos de Interesse','Data de Cadastro','Valor disposto a pagar'])
+```
+
+```{python}
+df_trat_new.shape
+```
+
+```{python}
+from unicodedata import normalize
+
+df_trat_new['Cidade'] = df_trat_new['Cidade'].apply(lambda x :normalize('NFKD', x).encode('ASCII','ignore').decode('ASCII')).str.upper()
+df_trat_new['Estado'] = df_trat_new['Estado'].apply(lambda x :normalize('NFKD', x).encode('ASCII','ignore').decode('ASCII')).str.upper()
+```
+
+```{python}
+df_trat_new.shape
+```
+
+```{python}
+df_trat_new["CIDADE_ESTADO"] = df_trat_new["Cidade"] + df_trat_new["Estado"]
+```
+
+```{python}
+#"Declarado"/"Não declarado"
+df_trat_new['Telefone'] = np.where(df_trat_new['Telefone'].isna(), 0, 1)
+df_trat_new['Email'] = np.where(df_trat_new['Email'].isna(), 0, 1)
+
+#Classe "Não declarado"
+df_trat_new['CIDADE_ESTADO'] = np.where(df_trat_new['CIDADE_ESTADO'].isna(), 'Não declarado', df_trat_new['CIDADE_ESTADO'])
+df_trat_new['Estado'] = np.where(df_trat_new['Estado'].isna(), 'Não declarado', df_trat_new['Estado'])
+df_trat_new['Ano Escolar'] = np.where(df_trat_new['Ano Escolar'].isna(), 'Não declarado', df_trat_new['Ano Escolar'])
+
+#Substituição dos outliers
+df_trat_new["Idade"] = pd.to_numeric(df_trat_new["Idade"], errors='coerce')
+df_trat_new['Idade'] = np.where(df_trat_new['Idade'] < 12, np.nan, df_trat_new['Idade'])
+df_trat_new['Idade'] = np.where(df_trat_new['Idade'] > 40, np.nan, df_trat_new['Idade'])
+df_trat_new['Idade'] = np.where(pd.to_numeric(df_trat_new['Idade'], errors='coerce').isna(), 0, df_trat_new['Idade'])
+df_trat_new['Idade'] = df_trat_new['Idade'].astype(int)
+```
+
+```{python}
+df_trat_new.shape
+```
+
+```{python}
+df_trat_new['Idade_range'] = pd.cut(df_trat_new['Idade'], bins=bins_idade, labels=bins_idade[:-1])
+df_trat_new.loc[df_trat_new['Idade_range'].isna(), 'Idade_range'] = 0
+```
+
+```{python}
+df_trat_new.shape
+```
+
+```{python}
+df_trat_new['CIDADE_ESTADO'] =  city_le.transform(df_trat_new['CIDADE_ESTADO'])
+df_trat_new['Estado'] = uf_le.transform(df_trat_new['Estado'])
+df_trat_new['Ano Escolar'] = schoolyear_le.transform(df_trat_new['Ano Escolar'])
+df_trat_new['Idade_range'] = age_le.transform(df_trat_new['Idade_range'])
+```
+
+```{python}
+if tipo == 'dummy':
+    city_encoding = encoding(df_trat_new, 'CIDADE_ESTADO', tipo=tipo)
+    uf_encoding = encoding(df_trat_new, 'Estado', tipo=tipo)
+    schoolyear_encoding = encoding(df_trat_new, 'Ano Escolar', tipo=tipo)
+    
+    df_trat_new = df_trat_new.merge(city_encoding, how="left", left_index=True, right_index=True)
+    df_trat_new = df_trat_new.merge(uf_encoding, how="left", left_index=True, right_index=True)
+    df_trat_new = df_trat_new.merge(schoolyear_encoding, how="left", left_index=True, right_index=True)
+    
+else:
+    df_trat_new = df_trat_new.merge(phonenumber_encoding, how="left", left_on='Telefone', right_on='Telefone')
+    df_trat_new = df_trat_new.merge(email_encoding, how="left", left_on='Email', right_on='Email')
+    df_trat_new = df_trat_new.merge(city_encoding, how="left", left_on='CIDADE_ESTADO', right_on='CIDADE_ESTADO')
+    df_trat_new = df_trat_new.merge(uf_encoding, how="left", left_on='Estado', right_on='Estado')
+    df_trat_new = df_trat_new.merge(schoolyear_encoding, how="left", left_on='Ano Escolar', right_on='Ano Escolar')
+    df_trat_new = df_trat_new.merge(age_encoding, how="left", left_on='Idade_range', right_on='Idade_range')
+```
+
+```{python}
+df_trat_new = df_trat_new.fillna(0)
+```
+
+```{python}
+df_model_new = df_trat_new.copy()
+```
+
+```{python}
+X_new = df_model_new[columns]
+```
+
+```{python}
+X_new_sc = scaler.transform(X_new.drop("Flag_Matriculado", 1))
+X_new_sc = pd.DataFrame(data=X_new_sc, columns = X_new.drop("Flag_Matriculado", 1).columns, index = X_new.index)
+```
+
+```{python}
+y_pred_new = bestF.predict(X_new_sc)
+y_prob_new = bestF.predict_proba(X_new_sc)
+```
+
+```{python}
+df_result_new = pd.DataFrame(y_prob_new[:, 1], index=X_new_sc.index)
+df_result_new = df_result_new.rename(columns={0: 'LeadScore'})
+
+n, bins, patches = plt.hist(df_result_new['LeadScore'], align='left', color='b', label='Matriculado', alpha=0.5)
+plt.close()
+
+df_result_new["Faixa LeadScore"] = pd.DataFrame(pd.cut(df_result_new['LeadScore'], bins, labels=bins[:-1], include_lowest=True))["LeadScore"].astype(float)
+df_result_new = df_trat_new.merge(df_result_new, how="left", left_index=True, right_index=True)
+```
+
+```{python}
+n_score, bins_score, patches_score = plt.hist(df_result_new['LeadScore'], align='left', color='b', label='Matriculado', alpha=0.5)
+plt.close()
+
+df_result_new["Faixa LeadScore"] = pd.DataFrame(pd.cut(df_result_new['LeadScore'], bins_score, labels=bins_score[:-1], include_lowest=True))["LeadScore"].astype(float)
+#df_result["Faixa LeadScore"] = df_result["LeadScore"].apply(lambda x: math.floor(10*x)/10)
+
+df_result_new = df_model_new.merge(df_result_new[df_result_new.columns.difference(df_trat_new.columns)], how="inner", left_index=True, right_index=True)
+
+df_conversao_new = df_result_new.groupby("Faixa LeadScore").agg({
+    "Id": ["count"],
+    "Flag_Matriculado": ["sum", "mean"],
+})
+df_conversao_new.columns = df_conversao_new.columns.droplevel()
+df_conversao_new.columns = ["Enviados", "Matriculados", "Taxa de conversão"]
+df_conversao_new = df_conversao_new.reset_index()
+
+df_conversao_new = df_conversao_new.merge(pd.DataFrame(df_conversao_new.loc[::-1, "Enviados"].cumsum()[::-1]), how="left", right_index=True, left_index=True)
+df_conversao_new = df_conversao_new.merge(pd.DataFrame(df_conversao_new.loc[::-1, "Matriculados"].cumsum()[::-1]), how="left", right_index=True, left_index=True)
+df_conversao_new["Taxa de conversão acumulado"] = df_conversao_new["Matriculados_y"]/df_conversao_new["Enviados_y"]
+
+#df_conversao = df_conversao.fillna(0)
+
+df_conversao_new
+```
+
+```{python}
+fig, axes = plt.subplots(1, 1, sharey=False, sharex=True, figsize=(20,5))
+
+axes.hist(df_result_new['LeadScore'], bins=bins_score, align='left', color='b', label='Matriculado', alpha=0.5)
+axes.legend(loc='best')
+axes.set_title('LeadScore - Matriculados')
+axes2 = axes.twinx()
+axes2.plot(bins_score[:-1], df_conversao_new['Taxa de conversão'], label='Tx de Conversao', marker='o', color='orange')
+axes2.plot(bins_score, np.array([df_result_new["Flag_Matriculado"].mean()]*len(bins_score)), label='Tx de Conversao', marker='o', color='black')
+axes.set_xlim(0, 1, 0.1)
+axes.set_ylim(0, 200000, 1000)
+axes2.set_ylim(0, 0.05, 0.005);
+```
+
+```{python}
+df_result_new.shape
+```
+
+```{python}
+df_dados_originais.merge(df_result_new,left_on='Id',right_on='Id').to_excel('Remessa Cruzeiro com LeadScore_22012020.xlsx')
+```
+
+```{python}
+df_result_new[df_result_new['Id']=='f6b5a6c5-98cd-45bc-a3f1-8ac048f50238'][['Nome']]
+```
+
+```{python}
+df_trat[['CIDADE_ESTADO','Cidade']]
+```
+
+```{python}
+df_trat_new[['CIDADE_ESTADO','Cidade']]
+```
+
+```{python}
+df_trat_new.columns
+```
+
+```{python}
+df_trat_new[df_trat_new['Cidade']=='SAO PAULO'][['CIDADE_ESTADO','Cidade','Estado']]
+```
+
+```{python}
+df_trat[df_trat['Cidade']=='SAO PAULO'][['CIDADE_ESTADO','Cidade','Estado']]
+```
+
+```{python}
+df_trat.groupby(['Cidade','Estado','CIDADE_ESTADO']).agg({'Id':'count'}).reset_index().to_excel('CidadesDFTRAT.xlsx')
+```
+
+```{python}
+df_trat_new.groupby(['Cidade','Estado','CIDADE_ESTADO']).agg({'Id':'count'}).reset_index().to_excel('CidadesDFTRATNEW.xlsx')
+```
+
+```{python}
+
+```
